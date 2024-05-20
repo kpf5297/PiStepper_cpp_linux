@@ -4,7 +4,7 @@
     Provides an interface for controlling a stepper motor using a Raspberry Pi and the libgpiod library.
     This class allows for setting motor speed, acceleration, microstepping, and supports operations like
     moving a specific number of steps or to a specific angle. It also includes homing functionality using
-    limit switches.
+    limit switches, emergency stop, and non-blocking move operations.
 
     Author: Kevin Fox
     Date: May 20, 2024
@@ -17,10 +17,15 @@
 #include <gpiod.h>
 #include <iostream>
 #include <mutex>
+#include <thread>
+#include <functional>
 
 // GPIO pin definitions for limit switches
 #define LIMIT_SWITCH_BOTTOM_PIN 21
 #define LIMIT_SWITCH_TOP_PIN 20
+
+// Define the full range of steps for your stepper motor
+#define FULL_COUNT_RANGE 1700
 
 class PiStepper {
 public:
@@ -43,75 +48,33 @@ public:
     ~PiStepper();
 
     // Setters
-    /**
-     * Sets the speed of the stepper motor in RPM.
-     *
-     * @param speed The speed in RPM.
-     */
-    void setSpeed(float speed);
-
-    /**
-     * Sets the acceleration of the stepper motor in RPM/s.
-     *
-     * @param acceleration The acceleration in RPM/s.
-     */
-    void setAcceleration(float acceleration);
-
-    /**
-     * Sets the microstepping value for the stepper motor.
-     *
-     * @param microstepping The microstepping value.
-     */
-    void setMicrostepping(int microstepping);
+    void setSpeed(float speed); // Set the speed of the stepper motor in RPM
+    void setAcceleration(float acceleration); // Set the acceleration of the stepper motor in RPM/s
+    void setMicrostepping(int microstepping); // Set the microstepping value for the stepper motor
 
     // Stepper control
-    /**
-     * Enables the stepper motor.
-     */
-    void enable();
-
-    /**
-     * Disables the stepper motor.
-     */
-    void disable();
-
-    /**
-     * Moves the stepper motor a specified number of steps in a specified direction.
-     *
-     * @param steps The number of steps to move.
-     * @param direction The direction to move (0 or 1).
-     */
-    void moveSteps(int steps, int direction);
-
-    /**
-     * Moves the stepper motor a specified angle in a specified direction.
-     *
-     * @param angle The angle in degrees to move.
-     * @param direction The direction to move (0 or 1).
-     */
-    void moveAngle(float angle, int direction);
-
+    void enable(); // Enable the stepper motor
+    void disable(); // Disable the stepper motor
+    void moveSteps(int steps, int direction); // Move the stepper motor a specified number of steps in a specified direction
+    void moveAngle(float angle, int direction); // Move the stepper motor a specified angle in a specified direction
+    
     // Homing
-    /**
-     * Moves the motor towards a limit switch to define a home position.
-     */
-    void homeMotor();
+    void homeMotor(); // Move the motor towards a limit switch to define a home position
 
     // Position tracking
-    /**
-     * Gets the current step count relative to the starting position.
-     *
-     * @return The current step count.
-     */
-    int getCurrentStepCount() const;
+    int getCurrentStepCount() const; // Get the current step count relative to the starting position
 
-    /**
-     * Moves the stepper motor a specified number of steps over a specified duration.
-     *
-     * @param steps The number of steps to move.
-     * @param durationSeconds The duration in seconds over which to move the steps.
-     */
-    void moveStepsOverDuration(int steps, int durationSeconds);
+    // Asynchronous operation
+    void moveStepsAsync(int steps, int direction, std::function<void()> callback = nullptr); // Move steps asynchronously
+    void stopMovement(); // Stop any ongoing movement
+
+    // Safety
+    void emergencyStop(); // Immediately stop the motor and disable it
+
+    // Calibration
+    void calibrate(); // Calibrate the motor by moving to both limit switches
+
+    void moveStepsOverDuration(int steps, int durationSeconds); // Move the stepper motor a specified number of steps over a specified duration
 
 private:
     // GPIO pin assignments
@@ -123,6 +86,7 @@ private:
     float _speed;
     float _acceleration;
     int _currentStepCount; // Tracks the current step position relative to the starting point
+    bool _isMoving; // Tracks if the motor is currently moving
 
     // GPIO chip and line pointers
     gpiod_chip *chip;
@@ -133,14 +97,8 @@ private:
     gpiod_line *limit_switch_top;
 
     // Private methods
-    /**
-     * Converts a number of steps to an angle.
-     *
-     * @param steps The number of steps.
-     * @return The corresponding angle in degrees.
-     */
-    float stepsToAngle(int steps);
-
+    float stepsToAngle(int steps); // Convert steps to angle
+    void internalMoveSteps(int steps, int direction); // Internal method to handle moving steps
     std::mutex gpioMutex; // Mutex for thread-safe GPIO access
 };
 

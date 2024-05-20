@@ -14,7 +14,7 @@
 PiStepper::PiStepper(int stepPin, int dirPin, int enablePin, int stepsPerRevolution, int microstepping)
     : _stepPin(stepPin), _dirPin(dirPin), _enablePin(enablePin),
       _stepsPerRevolution(stepsPerRevolution), _microstepping(microstepping),
-      _speed(20), _acceleration(80), _currentStepCount(0) {
+      _speed(20), _acceleration(80), _currentStepCount(0), _isMoving(false) {
     // Initialize the GPIO chip and lines
     chip = gpiod_chip_open("/dev/gpiochip0");
     step_signal = gpiod_chip_get_line(chip, _stepPin);
@@ -60,40 +60,15 @@ void PiStepper::disable() {
 }
 
 void PiStepper::moveSteps(int steps, int direction) {
-    enable();
-    gpiod_line_set_value(dir_signal, direction);
-
-    float stepDelay = 60.0 * 1000000 / (_speed * _stepsPerRevolution * _microstepping); // delay in microseconds
-
-    for (int i = 0; i < steps; i++) {
-        if (gpiod_line_get_value(limit_switch_top) == 0 && direction == 1) {
-            std::cout << "Top limit switch triggered" << std::endl;
-            break;
-        }
-
-        if (gpiod_line_get_value(limit_switch_bottom) == 0 && direction == 0) {
-            std::cout << "Bottom limit switch triggered" << std::endl;
-            break;
-        }
-
-        gpiod_line_set_value(step_signal, 1);
-        usleep(stepDelay / 2); // Half delay for pulse high
-        gpiod_line_set_value(step_signal, 0);
-        usleep(stepDelay / 2); // Half delay for pulse low
-
-        if (direction == 0) {
-            _currentStepCount--;
-        } else {
-            _currentStepCount++;
-        }
-    }
-    disable();
+    std::lock_guard<std::mutex> lock(gpioMutex);
+    _isMoving = true;
+    internalMoveSteps(steps, direction);
+    _isMoving = false;
 }
 
 void PiStepper::moveAngle(float angle, int direction) {
     int steps = std::round(angle * ((_stepsPerRevolution * _microstepping) / 360.0f));
     moveSteps(steps, direction);
-
     std::cout << "Calculated steps: " << steps << std::endl;
 }
 
@@ -133,4 +108,66 @@ void PiStepper::moveStepsOverDuration(int steps, int durationSeconds) {
 
     setSpeed(rpm); // Set the calculated RPM
     moveSteps(steps, 1); // Move the motor
+}
+
+void PiStepper::internalMoveSteps(int steps, int direction) {
+    enable();
+    gpiod_line_set_value(dir_signal, direction);
+
+    float stepDelay = 60.0 * 1000000 / (_speed * _stepsPerRevolution * _microstepping); // delay in microseconds
+
+    for (int i = 0; i < steps; i++) {
+        if (gpiod_line_get_value(limit_switch_top) == 0 && direction == 1) {
+            std::cout << "Top limit switch triggered" << std::endl;
+            break;
+        }
+
+        if (gpiod_line_get_value(limit_switch_bottom) == 0 && direction == 0) {
+            std::cout << "Bottom limit switch triggered" << std::endl;
+            break;
+        }
+
+        gpiod_line_set_value(step_signal, 1);
+        usleep(stepDelay / 2); // Half delay for pulse high
+        gpiod_line_set_value(step_signal, 0);
+        usleep(stepDelay / 2); // Half delay for pulse low
+
+        if (direction == 0) {
+            _currentStepCount--;
+        } else {
+            _currentStepCount++;
+        }
+    }
+    disable();
+}
+
+void PiStepper::moveStepsAsync(int steps, int direction, std::function<void()> callback) {
+    std::thread([this, steps, direction, callback]() {
+        moveSteps(steps, direction);
+        if (callback) {
+            callback();
+        }
+    }).detach();
+}
+
+void PiStepper::stopMovement() {
+    std::lock_guard<std::mutex> lock(gpioMutex);
+    _isMoving = false;
+    disable();
+}
+
+void PiStepper::emergencyStop() {
+    std::lock_guard<std::mutex> lock(gpioMutex);
+    _isMoving = false;
+    disable();
+    _currentStepCount = 0; // Optionally reset step count
+    std::cout << "Emergency Stop Activated!" << std::endl;
+}
+
+void PiStepper::calibrate() {
+    // Example calibration routine
+    homeMotor();
+    // Move to top limit switch and determine the full range
+    moveSteps(FULL_COUNT_RANGE, 1); // Move to the top limit switch
+    std::cout << "Calibration complete. Full range: " << _currentStepCount << " steps." << std::endl;
 }
